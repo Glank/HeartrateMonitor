@@ -1,6 +1,7 @@
 #include "pulse_test.h"
 #include <cstdio>
 #include <vector>
+#include <list>
 #include <algorithm>
 
 #define ASSERT(t, msg, ...) if(!(t)){char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);return false;}
@@ -56,24 +57,23 @@ bool test_mem_stack() {
   return true;
 }
 
-class TestStream : public PeakProcessingStream {
-  std::function<void(std::shared_ptr<Peak>)> on_push;
+template <typename T>
+class TestStream : public PushTarget<std::shared_ptr<T>> {
+  std::function<void(std::shared_ptr<T>)> on_push;
   public:
-    TestStream(std::function<void(std::shared_ptr<Peak>)> f) : on_push(f) {}
-    void push(std::shared_ptr<Peak> p) override { on_push(p); }
-    std::shared_ptr<Peak> pop() override { return nullptr; }
+    TestStream(std::function<void(std::shared_ptr<T>)> f) : on_push(f) {}
+    void push(std::shared_ptr<T> p) override { on_push(p); }
 };
 
 bool test_width_calc_stream() {
-  Serial.println("Testing WidthCalculatingStream...");
+  Serial.println("Testing WidthCalcStream...");
 
   MemStack<Peak, 5> memstack;
-  WidthCalculatingStream stream;
-  std::vector<float> widths;
-  TestStream test_out([&](std::shared_ptr<Peak> p){
+  std::vector<long> widths;
+  TestStream<Peak> test_out([&](std::shared_ptr<Peak> p){
     widths.push_back(p->w);
   });
-  stream.set_next(&test_out);
+  WidthCalcStream stream(&test_out);
 
   // send a peak every second
   for(int t = 0; t < 10000; t+=1000) {
@@ -82,7 +82,7 @@ bool test_width_calc_stream() {
     stream.push(peak);
   }
 
-  for(float w : widths) {
+  for(long w : widths) {
     ASSERT(w==2000, "Width was not 2000ms.");
   }
   ASSERT(widths.size() == 8, "Not 8 widths output, %d", widths.size());
@@ -90,12 +90,97 @@ bool test_width_calc_stream() {
   return true;
 }
 
+bool test_width_stats_stream() {
+  Serial.println("Testing WidthStatsStream...");
+
+  MemStack<Peak, 2*PULSE_VALIDATION_WINDOW_MS/1000> memstack;
+  std::vector<float> avgs;
+  std::vector<float> stds;
+  TestStream<Peak> test_out([&](std::shared_ptr<Peak> p){
+    avgs.push_back(p->avg);
+    stds.push_back(p->std);
+  });
+  WidthStatsStream stream(&test_out);
+
+  // send a peak every second for PULSE_VALIDATION_WINDOW_MS*2 seconds
+  for(long t = 0; t < PULSE_VALIDATION_WINDOW_MS*2; t+=1000) {
+    auto peak = memstack.make();
+    peak->t = t;
+    peak->w = 2000;
+    stream.push(peak);
+  }
+
+  for(float avg : avgs) {
+    ASSERT(avg==2000, "Avg was %f, not 2000ms.", avg);
+  }
+  ASSERT(avgs.size() >= PULSE_VALIDATION_WINDOW_MS/1000, "Not enough avgs, %d", avgs.size());
+  for(float std : stds) {
+    ASSERT(std==0, "Std was not 0.");
+  }
+  ASSERT(avgs.size() == stds.size(), "Not enough stds, %d", stds.size());
+
+  return true;
+}
+
+bool test_pulse_validation_stream() {
+  Serial.println("Testing PulseValidationStream...");
+
+  MemStack<Peak, 10> peak_memstack;
+  MemStack<Pulse, 2> pulse_memstack;
+  std::list<Pulse> pulses;
+  TestStream<Pulse> test_out([&](std::shared_ptr<Pulse> p){
+    p->next = nullptr;
+    pulses.push_back(*p);
+  });
+  PulseValidationStream stream(&pulse_memstack, &test_out);
+
+  // send a peak every second for 20 seconds
+  for(int i = 0; i < 20; i++) {
+    auto peak = peak_memstack.make();
+    peak->t = i*1000L;
+    peak->amp = 150;
+    peak->w = 2000;
+    peak->avg = 2000;
+    peak->std = 0;
+    stream.push(peak);
+  }
+
+  ASSERT(pulses.size() == 20, "Not enough valid pulses, %d", pulses.size());
+
+  pulses.clear();
+  char test_seq[] = "fvfqfvqfv";
+  char exp_seq[] =  "fvfvfvvfv";
+  for(int i = 0; i < sizeof(test_seq)-1; i++) {
+    char v = test_seq[i];
+    auto peak = peak_memstack.make();
+    peak->t = i*1000L;
+    peak->amp = v=='f' ? 50 : 150;
+    peak->w = v=='v' ? 2000 : 1000;
+    peak->avg = 2000;
+    peak->std = 10;
+    stream.push(peak);
+  }
+  
+  ASSERT(pulses.size() == 5, "Expected 5 valid pulses, got %d", pulses.size());
+  bool ac = true;
+  for(int i = 0; i < sizeof(exp_seq)-1; i++) {
+    if (exp_seq[i] == 'v') {
+      Pulse p = pulses.front();
+      pulses.pop_front();
+      ASSERT_CONT(ac, p.t==i*1000L, "Expected peak %d to be marked valid.", i);
+    }
+  }
+  return ac;
+}
+
 bool all_pulse_tests() {
   Serial.println("Running tests for \"pulse.h\\cpp\"...");
 
   ASSERT(test_ring_buffer(), "RingBuffer Failed");
   ASSERT(test_mem_stack(), "MemStack Failed");
-  ASSERT(test_width_calc_stream(), "WidthCalculatingStream Failed");
+  ASSERT(test_width_calc_stream(), "WidthCalcStream Failed");
+  ASSERT(test_width_stats_stream(), "WidthStatsStream Failed");
+  ASSERT(test_pulse_validation_stream(), "PulseValidationStream Failed");
   
   Serial.println("All tests pass!");
   return true;

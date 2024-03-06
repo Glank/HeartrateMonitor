@@ -38,61 +38,112 @@ bool PulseTrackerInternals::detect_peak(long now) {
   last_slope = slope;
   if (!maximum)
     return false;
-
-  /*
-  Peak& peak = peaks.push_back();
-  peak.t = now-(PULSE_SLOPE_WINDOW-max_i-1)*1000/PULSE_SAMPLE_RATE;
-  peak.amp = max_amp;
-  peak.w = -1;
-  peak.avg = -1;
-  peak.std = -1;
-  peak.val = '_';
-  peak.d = -1;
-  */
   return true;
 }
-void WidthCalculatingStream::push(std::shared_ptr<Peak> p) {
-  if (size==0) {
-    tail = p;
-    head = p;
-    size = 1;
-  } else {
-    head->next = p;
-    head = p;
-    size++;
-  }
-  if (size>3) {
-    tail = tail->next;
-    size--;
-  }
 
+void WidthCalcStream::after_push() {
+  if(sizes[BACK] > 3)
+    advance(BACK);
   #ifdef PULSE_DEBUG
-  if (size > 3)
-    Serial.println("Error: unexpected stream state, size>3");
+  if (sizes[BACK] > 3)
+    Serial.println("Error: invalid WidthCalcStream state, more than 3 pulses");
   #endif
-
-  if(size != 3)
+  if(sizes[BACK] != 3)
     return;
-  auto mid = tail->next;
-  mid->w = head->t - tail->t;
+  auto mid = heads[BACK]->next;
+  mid->w = heads[FRONT]->t - heads[BACK]->t;
 
   if(next_stream==nullptr)
     return;
   next_stream->push(mid);
 }
-std::shared_ptr<Peak> WidthCalculatingStream::pop() {
-  if (size==0)
-    return nullptr;
-  size--;
-  auto tmp = tail;
-  tail = tail->next;
-  if(size<=1)
-    head = tail;
-  return tmp;
+
+void WidthStatsStream::after_push() {
+  if(heads[AVAILABLE]==heads[BACK]) {
+    // first push, need to init w_sum and w2_sum
+    w_sum += heads[FRONT]->w;
+    w2_sum += heads[FRONT]->w*heads[FRONT]->w;
+  }
+  // while there is enough lead time to calculate the next avg and std
+  while(true) {
+    // snug up the back half of the window if necessary
+    while (sizes[BACK]>1 && heads[WRITE]->t - heads[BACK]->next->t > PULSE_VALIDATION_WINDOW_MS/2) {
+      w_sum -= heads[BACK]->w;
+      w2_sum -= heads[BACK]->w*heads[BACK]->w;
+      advance(BACK);
+    }
+    // expand the front half of the window as necessary
+    while (sizes[FRONT] > 1 && heads[FRONT]->t - heads[WRITE]->t < PULSE_VALIDATION_WINDOW_MS/2) {
+      advance(FRONT);
+      w_sum += heads[FRONT]->w;
+      w2_sum += heads[FRONT]->w*heads[FRONT]->w;
+    }
+    if (heads[FRONT]->t - heads[WRITE]->t < PULSE_VALIDATION_WINDOW_MS/2)
+      return; // not enough lead time to calculate the avg and std
+
+    // write the stats
+    int n = sizes[BACK]+sizes[WRITE]-1; // -1 is because the write head gets counted twice
+    float avg = w_sum/n;
+    float avg2 = w2_sum/n;
+    heads[WRITE]->avg = avg;
+    heads[WRITE]->std = sqrt(avg2-avg*avg);
+    next_stream->push(heads[WRITE]);
+    advance(WRITE);
+  }
 }
-void WidthCalculatingStream::set_next(PeakProcessingStream* n) {
-  next_stream = n;
+void WidthStatsStream::before_pop() {
+  if (sizes[BACK] > 0) {
+    w_sum -= heads[BACK]->w;
+    w2_sum -= heads[BACK]->w*heads[BACK]->w;
+  }
 }
+
+void PulseValidationStream::after_push() {
+  auto f = heads[FRONT];
+  bool assumed_valid = (f->w-f->avg)/f->std > -1 || f->w/f->avg >= 0.7;
+  if (!assumed_valid)
+    return; // wait for valid to resolve questionable
+
+  if (sizes[BACK] <= 2) {
+    std::shared_ptr<Pulse> pulse = pulse_allocator->make();
+    pulse->t = heads[FRONT]->t;
+    next_stream->push(pulse);
+    while(heads[FRONT] != nullptr)
+      advance(BACK);
+    return;
+  }
+
+  float e_avg = 0, o_avg = 0;
+  
+  int i = 0;
+  for (auto cur = heads[BACK]; cur != f; cur = cur->next) {
+    if (i%2 == 0)
+      e_avg += cur->amp;
+    else
+      o_avg += cur->amp;
+    i++;
+  }
+  e_avg /= sizes[BACK]/2;
+  o_avg /= (sizes[BACK]-1)/2;
+  int valid_parity = e_avg < o_avg;
+  for (i = 0; heads[BACK] != f; i++) {
+    if (i%2 == valid_parity) {
+      std::shared_ptr<Pulse> pulse = pulse_allocator->make();
+      pulse->t = heads[BACK]->t;
+      next_stream->push(pulse);
+    }
+    advance(BACK);
+  }
+  std::shared_ptr<Pulse> pulse = pulse_allocator->make();
+  pulse->t = heads[FRONT]->t;
+  next_stream->push(pulse);
+  advance(BACK);
+}
+
+void DeltaCalcStream::after_push() {
+  // TODO
+}
+
 void PulseTrackerInternals::push(int pulse_signal, long time) {
   pulse_signals.push_back() = pulse_signal;
   if(!detect_peak(time))
