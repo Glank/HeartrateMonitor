@@ -348,6 +348,10 @@ bool test_pulse_tracker() {
 bool all_pulse_tests() {
   Serial.println("Running tests for \"pulse.h\\cpp\"...");
 
+  #ifndef PULSE_DEBUG
+  Serial.println("Warning: PULSE_DEBUG not enabled.");
+  #endif
+
   ASSERT(test_ring_buffer(), "RingBuffer Failed");
   ASSERT(test_mem_stack(), "MemStack Failed");
   ASSERT(test_width_calc_stream(), "WidthCalcStream Failed");

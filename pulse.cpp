@@ -149,7 +149,7 @@ void HRCalcStream::after_push() {
   hr->hr_lb = 60000.0/(d_avg+2*std);
   hr->hr_ub = 60000.0/(d_avg-2*std);
   float range = hr->hr_ub - hr->hr_lb;
-  if (range > 10 || range/hr->hr > 0.05) {
+  if (range > PULSE_MAX_ABSOLUTE_HR_VARIANCE || range/hr->hr > PULSE_MAX_PERCENT_HR_VARIANCE) {
     strcpy(hr->err, "Variance Too High");
   } else {
     hr->err[0] = 0;

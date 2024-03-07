@@ -4,11 +4,16 @@
 #include <functional>
 #include <memory>
 #include <stdlib.h>
+#include <Esp.h>
 
-#define PULSE_DEBUG
+//#define PULSE_DEBUG
 #ifdef PULSE_DEBUG
 #include <Arduino.h>
 #endif
+
+// TODO: Handle timer rollover events.
+// TODO: Implement thief re-allocator for PulseTracker memstacks.
+// TODO: Decouple hardware-specific code
 
 #define PULSE_SAMPLE_RATE 40  // samples per second
 #define PULSE_SLOPE_WINDOW_MS 225
@@ -18,6 +23,8 @@
 #define PULSE_MAX_PEAKS_MEM (15*250*3/(2*60)) // enough to cover about 15s of pulses at 250bpm, with an additiopnal 50% false pulses
 #define PULSE_MAX_PULSES_MEM (10*250/60) // enough to cover about 10s of pulses at 250bpm
 #define PULSE_MAX_HR_STALENESS 900 // .9s
+#define PULSE_MAX_ABSOLUTE_HR_VARIANCE 5 // bpm
+#define PULSE_MAX_PERCENT_HR_VARIANCE .1 // 10%
 
 struct HeartRate {
   long time; // time of measure, relative to system clock. millisecs
