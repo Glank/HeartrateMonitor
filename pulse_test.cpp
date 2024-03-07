@@ -1,11 +1,13 @@
 #include "pulse_test.h"
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <list>
 #include <algorithm>
+#include "user_interface.h"
 
-#define ASSERT(t, msg, ...) if(!(t)){char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);return false;}
-#define ASSERT_CONT(ac, t, msg, ...) if(!(t)){char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);ac = false;}
+#define ASSERT(t, msg, ...) if(!(t)){Serial.print(__LINE__);Serial.print(": ");char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);return false;}
+#define ASSERT_CONT(ac, t, msg, ...) if(!(t)){Serial.print(__LINE__);Serial.print(": ");char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);ac = false;}
 
 bool test_ring_buffer() {
   Serial.println("Testing RingBuffer...");
@@ -22,6 +24,7 @@ bool test_ring_buffer() {
   buf.push_back() = 10;
   buf.push_back() = 11;
   ASSERT(buf.back() == 11, "back != 11");
+  
   return true;
 }
 
@@ -173,6 +176,175 @@ bool test_pulse_validation_stream() {
   return ac;
 }
 
+bool test_delta_calc_stream() {
+  Serial.println("Testing DeltaCalcStream...");
+
+  MemStack<Pulse, 3> memstack;
+  std::list<long> deltas;
+  TestStream<Pulse> test_out([&](std::shared_ptr<Pulse> p){
+    deltas.push_back(p->d);
+  });
+  DeltaCalcStream stream(&test_out);
+
+  // send a pulse every second for 20 seconds
+  for(int i = 0; i < 20; i++) {
+    auto pulse = memstack.make();
+    pulse->t = i*1000L;
+    stream.push(pulse);
+  }
+
+  ASSERT(deltas.size() == 19, "Expected 19 deltas, got %d", deltas.size());
+  for(long d : deltas) {
+    ASSERT(d==1000, "Expected delta to be 1000.");
+  }
+
+  return true;
+}
+
+bool test_hr_calc_stream() {
+  Serial.println("Testing HRCalcStream...");
+
+  MemStack<Pulse, 2*(PULSE_HR_SAMPLE_WINDOW/1000+2)> memstack;
+  MemStack<HeartRate, 3> hr_memstack;
+  std::vector<HeartRate> hrs;
+  TestStream<HeartRate> test_out([&](std::shared_ptr<HeartRate> hr){
+    hrs.push_back(*hr);
+  });
+  HRCalcStream stream(&hr_memstack, &test_out);
+
+  // send a pulse every second for a little longer than the sampling window
+  long cur_time = 0;
+  for(int i = 0; i-10 < PULSE_HR_SAMPLE_WINDOW/1000; i++) {
+    auto pulse = memstack.make();
+    pulse->t = cur_time;
+    pulse->d = 1000L;
+    stream.push(pulse);
+    cur_time += pulse->d;
+  }
+
+  ASSERT(hrs.size() != 0, "Expected heartrates.");
+  long last_time = -1;
+  for(auto& hr : hrs) {
+    ASSERT(last_time <= hr.time, "Expected times to be strictly increasing.");
+    last_time = hr.time;
+    ASSERT(hr.hr == 60, "Expected hr to be 60bpm, was %f", hr.hr);
+    ASSERT(hr.hr_lb == 60, "Expected hr_lb to be 60bpm, was %f", hr.hr_lb);
+    ASSERT(hr.hr_ub == 60, "Expected hr_ub to be 60bpm, was %f", hr.hr_ub);
+    ASSERT(hr.err[0] == 0, "Expected no err, but got %s", hr.err);
+  }
+
+  hrs.clear();
+  // send really noisy HRs for a little longer than the sampling window to fill the buffer with noisy data.
+  for (int i = 0; i-10 < 2*PULSE_HR_SAMPLE_WINDOW/1000; i++){
+    auto pulse = memstack.make();
+    pulse->t = cur_time;
+    pulse->d = i%2 == 0 ? 1000L : 10L;
+    stream.push(pulse);
+    cur_time +=  pulse->d;
+  }
+
+  // do it again, this time with fealing.
+  hrs.clear();
+  for (int i = 0; i-10 < 2*PULSE_HR_SAMPLE_WINDOW/1000; i++){
+    auto pulse = memstack.make();
+    pulse->t = cur_time;
+    pulse->d = i%2 == 0 ? 1000L : 10L;
+    stream.push(pulse);
+    cur_time +=  pulse->d;
+  }
+
+  ASSERT(hrs.size() != 0, "Expected heartrates.");
+  for(auto& hr : hrs) {
+    ASSERT(last_time <= hr.time, "Expected times to still be strictly increasing.");
+    last_time = hr.time;
+    ASSERT(hr.hr > 60, "Expected hr to be > 60bpm, was %f", hr.hr);
+    ASSERT(hr.hr_lb < hr.hr_ub, "Expected lb < ub, but had lb=%f and ub=%f", hr.hr_lb, hr.hr_ub);
+    ASSERT(hr.err[0] != 0, "Expected err, but was no err");
+  }
+
+  return true;
+}
+
+bool test_pulse_tracker() {
+  Serial.println("Testing PulseTrackerInternals...");
+  const long expected_lag = PULSE_HR_SAMPLE_WINDOW+PULSE_VALIDATION_WINDOW_MS+PULSE_MAX_HR_STALENESS+500;
+
+  // it's too big to allocate on the stack without triggering "stack smashing" error
+  static PulseTrackerInternals pulse_tracker;
+  // send a sin signal at 1hz til t=15s
+  long t = 0;
+  for(; t < 15*1000L; t+=PULSE_SAMPLE_RATE) {
+    double sig = 100+100*sin(PI*2*t/1000.0);
+    pulse_tracker.push((int)sig, t);
+  }
+
+  HeartRate hr;
+  pulse_tracker.get_heartrate(&hr);
+  bool ac = true;
+  ASSERT_CONT(ac, t-hr.time<=expected_lag,
+    "Expected hr lag to be <= expected_lag (%d), but was %d",
+    expected_lag, t-hr.time);
+  ASSERT_CONT(ac, hr.hr == 60, "Expected hr to be 60bpm, was %f", hr.hr);
+  ASSERT_CONT(ac, hr.hr_lb == 60, "Expected hr_lb to be 60bpm, was %f", hr.hr_lb);
+  ASSERT_CONT(ac, hr.hr_ub == 60, "Expected hr_ub to be 60bpm, was %f", hr.hr_ub);
+  ASSERT_CONT(ac, hr.err[0] == 0, "Expected no err, but got %s", hr.err);
+  ASSERT(ac, "HR failed at 15s");
+
+  // send a sin signal at 1.25hz till t=30s
+  for(; t < 30*1000L; t+=PULSE_SAMPLE_RATE) {
+    double sig = 100+100*sin(1.25*PI*2*t/1000.0);
+    pulse_tracker.push((int)sig, t);
+  }
+
+  pulse_tracker.get_heartrate(&hr);
+  ASSERT_CONT(ac, t-hr.time<=expected_lag,
+    "Expected hr lag to be <= expected_lag (%d), but was %d",
+    expected_lag, t-hr.time);
+  ASSERT_CONT(ac, hr.hr == 75, "Expected hr to be 75bpm, was %f", hr.hr);
+  ASSERT_CONT(ac, hr.hr_lb == 75, "Expected hr_lb to be 75bpm, was %f", hr.hr_lb);
+  ASSERT_CONT(ac, hr.hr_ub == 75, "Expected hr_ub to be 75bpm, was %f", hr.hr_ub);
+  ASSERT_CONT(ac, hr.err[0] == 0, "Expected no err, but got %s", hr.err);
+  ASSERT(ac, "HR failed at 30s");
+
+  // send a sin signal at 1.25hz till t=45s
+  // with spikes of noise near t=32 and t=38.5
+  std::srand(3141);
+  for(; t < 45*1000L; t+=PULSE_SAMPLE_RATE) {
+    double sig = 100+100*sin(1.25*PI*2*t/1000.0);
+    if(abs(t-32000L)<250 || abs(t-38500L)<250) {
+      sig += 50*std::rand()/(double)(RAND_MAX+1)-75;
+      sig = sig < 0 ? 0 : sig;
+    }
+    pulse_tracker.push((int)sig, t);
+  }
+
+  pulse_tracker.get_heartrate(&hr);
+  ASSERT_CONT(ac, t-hr.time<=expected_lag,
+    "Expected hr lag to be <= expected_lag (%d), but was %d",
+    expected_lag, t-hr.time);
+  ASSERT_CONT(ac, abs(hr.hr-75)<5, "Expected hr to be near 75bpm, was %f", hr.hr);
+  ASSERT_CONT(ac, hr.hr_lb<hr.hr_ub, "Expected hr_lb (%f) to be less than hr_ub (%f)", hr.hr_lb, hr.hr_ub);
+  ASSERT_CONT(ac, hr.err[0] == 0, "Expected no err, but got %s", hr.err);
+  ASSERT(ac, "HR failed at 45s");
+
+  // send random noise till t=60s
+  std::srand(3141);
+  for(; t < 60*1000L; t+=PULSE_SAMPLE_RATE) {
+    double sig = 50+100*std::rand()/(double)(RAND_MAX+1);
+    pulse_tracker.push((int)sig, t);
+  }
+
+  pulse_tracker.get_heartrate(&hr);
+  ASSERT_CONT(ac, t-hr.time<=expected_lag,
+    "Expected hr lag to be <= expected_lag (%d), but was %d",
+    expected_lag, t-hr.time);
+  ASSERT_CONT(ac, hr.hr_lb<hr.hr_ub, "Expected hr_lb (%f) to be less than hr_ub (%f)", hr.hr_lb, hr.hr_ub);
+  ASSERT_CONT(ac, hr.err[0] != 0, "Expected an error, but there was none. hr_lb=%f, hr_ub=%f", hr.hr_lb, hr.hr_ub);
+  ASSERT(ac, "HR failed at 60s");
+
+  return ac;
+}
+
 bool all_pulse_tests() {
   Serial.println("Running tests for \"pulse.h\\cpp\"...");
 
@@ -181,6 +353,9 @@ bool all_pulse_tests() {
   ASSERT(test_width_calc_stream(), "WidthCalcStream Failed");
   ASSERT(test_width_stats_stream(), "WidthStatsStream Failed");
   ASSERT(test_pulse_validation_stream(), "PulseValidationStream Failed");
+  ASSERT(test_delta_calc_stream(), "DeltaCalcStream Failed");
+  ASSERT(test_hr_calc_stream(), "HRCalcStream Failed");
+  ASSERT(test_pulse_tracker(), "PulseTrackerInternal Failed");
   
   Serial.println("All tests pass!");
   return true;

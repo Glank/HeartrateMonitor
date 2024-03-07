@@ -26,12 +26,12 @@ LogBuffer log_buf(1024);
 
 #define PULSE_TIMER_INTERVAL_MICROSECS (1000000L/PULSE_SAMPLE_RATE)
 ESP8266Timer pulse_timer;
-PulseTracker pulse_tracker;
+//PulseTracker pulse_tracker;
 
 void sample_pulse() {
   int pulse_signal = analogRead(PULSE_SENSOR_INPUT_PIN);
   long now = millis();
-  pulse_tracker.push(pulse_signal, now);
+  //pulse_tracker.push(pulse_signal, now);
 
   #ifdef LOG_PULSE_DATA
     char line[30];
