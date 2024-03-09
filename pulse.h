@@ -4,7 +4,10 @@
 #include <functional>
 #include <memory>
 #include <stdlib.h>
+#include "logbuffer.h"
+
 #include <Esp.h>
+#include <user_interface.h>
 
 //#define PULSE_DEBUG
 #ifdef PULSE_DEBUG
@@ -78,7 +81,8 @@ class RingBuffer {
         #ifdef PULSE_DEBUG
         Serial.println("Error: Could not allocate RingBuffer.");
         #endif;
-        ESP.restart();
+        ESP.getResetInfoPtr()->reason = REASON_EXCEPTION_RST;
+        ESP.reset();
       }
     }
     ~RingBuffer() = default;

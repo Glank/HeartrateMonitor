@@ -9,6 +9,8 @@
 #define ASSERT(t, msg, ...) if(!(t)){Serial.print(__LINE__);Serial.print(": ");char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);return false;}
 #define ASSERT_CONT(ac, t, msg, ...) if(!(t)){Serial.print(__LINE__);Serial.print(": ");char l[128];sprintf(l, msg __VA_OPT__(,) __VA_ARGS__);Serial.println(l);ac = false;}
 
+LogBuffer log_buf(512);
+
 bool test_ring_buffer() {
   Serial.println("Testing RingBuffer...");
   RingBuffer<int> buf(3);

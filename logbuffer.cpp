@@ -30,7 +30,7 @@ int LogBuffer::log(char* str) {
   return 0;
 }
 
-void LogBuffer::flush_to_serial() {
+void LogBuffer::flush(std::function<void(const uint8_t*, size_t)> write) {
   ATOMIC_INT cur_write_head = write_head;
   int read_start = (read_head+1)%buffer_len;
   // if the write head has wrapped around, but the read head hasn't yet
@@ -41,6 +41,14 @@ void LogBuffer::flush_to_serial() {
   }
   // flush to catch up with write_head
   if (cur_write_head != 0)
-    Serial.write(&buffer[read_start], cur_write_head-read_start);
+    write(&buffer[read_start], cur_write_head-read_start);
   read_head = (buffer_len+cur_write_head-1)%buffer_len;
+}
+
+std::unique_ptr<LogBuffer> LogBuffer::global_instance{nullptr};
+void LogBuffer::init_global(ATOMIC_INT length) {
+  LogBuffer::global_instance = std::make_unique<LogBuffer>(length);
+}
+LogBuffer* LogBuffer::global() {
+  return LogBuffer::global_instance.get();
 }
