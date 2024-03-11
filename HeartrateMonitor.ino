@@ -3,8 +3,7 @@
 
 // Mode select macros:
 //#define TEST
-#define LOG_PULSE_DATA
-#define LOG_HR_DATA
+#define DETAILED_LOGGING
 //#define HR_HUMAN_READABLE
 
 #include "pulse.h"
@@ -43,10 +42,6 @@ void sample_pulse() {
   int pulse_signal = analogRead(PULSE_SENSOR_INPUT_PIN);
   long now = millis();
   pulse_tracker.push(pulse_signal, now);
-
-  #ifdef LOG_PULSE_DATA
-    LOG(30, "p,%d,%d", now, pulse_signal);
-  #endif
 }
 
 void setup() {
@@ -54,6 +49,10 @@ void setup() {
   LogBuffer::init_global(512);
   Serial.begin(460800);
   Serial.println("\n\n");
+
+  #ifdef DETAILED_LOGGING
+  pulse_tracker.enable_logging();
+  #endif
 
   if(!pulse_timer.attachInterruptInterval(PULSE_TIMER_INTERVAL_MICROSECS, sample_pulse)) {
     Serial.print("Failed to attach timer.");
@@ -63,23 +62,18 @@ void setup() {
 
 long last_hr_time = 0;
 void loop() {
-  #ifdef LOG_HR_DATA
+  #ifdef HR_HUMAN_READABLE
     long now = millis();
     if (now-last_hr_time>=1000) {
       last_hr_time = now;
       HeartRate hr;
       pulse_tracker.get_heartrate(&hr);
-      // disable logging durring interrupts
-      #ifdef HR_HUMAN_READABLE
-        Serial.println();
-        if (hr.err[0]==0) {
-          LOG(30, "hr: %f [%f - %f]", hr.hr, hr.hr_lb, hr.hr_ub);
-        } else {
-          LOG(120, "Error: %s", hr.err);
-        }
-      #else
-        LOG(128, "hr,%d,%f,%f,%f,%s", hr.time, hr.hr, hr.hr_lb, hr.hr_ub, hr.err);
-      #endif
+      Serial.println();
+      if (hr.err[0]==0) {
+        LOG(30, "hr: %f [%f - %f]", hr.hr, hr.hr_lb, hr.hr_ub);
+      } else {
+        LOG(120, "Error: %s", hr.err);
+      }
     }
   #endif
   FLUSH_LOG_TO_SERIAL();

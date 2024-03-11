@@ -15,7 +15,7 @@
 #endif
 
 // TODO: Handle timer rollover events.
-// TODO: Implement thief re-allocator for PulseTracker memstacks.
+// TODO: Implement thief re-allocator for PulseTracker memstacks &/or limit stream total lengths
 // TODO: Decouple hardware-specific code
 
 #define PULSE_SAMPLE_RATE 40  // samples per second
@@ -301,6 +301,7 @@ class PulseValidationStream : public LinkedProcessingStream<Peak> {
     PushTarget<std::shared_ptr<Pulse>>* next_stream = nullptr;
     void after_push() override;
   public:
+    bool logging_enabled = false;
     PulseValidationStream(Allocator<Pulse>* pulse_allocator, PushTarget<std::shared_ptr<Pulse>>* next):
       LinkedProcessingStream<Peak>(2),
       pulse_allocator(pulse_allocator),
@@ -326,6 +327,7 @@ class HRCalcStream : public LinkedProcessingStream<Pulse> {
     long last_calc_time = 0;
     void after_push() override;
   public:
+    bool logging_enabled = false;
     HRCalcStream(Allocator<HeartRate>* hr_allocator, PushTarget<std::shared_ptr<HeartRate>>* next):
       LinkedProcessingStream<Pulse>(2),
       hr_allocator(hr_allocator),
@@ -357,6 +359,8 @@ class PulseTrackerInternals : public PushTarget<std::shared_ptr<HeartRate>>{
     DeltaCalcStream delta_stream;
     HRCalcStream hr_stream;
 
+    bool logging_enabled = false;
+
     void push(std::shared_ptr<HeartRate> hr) override;
 
     // Fast func to push a signal onto the buffer. Not safe to be interrupted.
@@ -365,6 +369,12 @@ class PulseTrackerInternals : public PushTarget<std::shared_ptr<HeartRate>>{
     void push(int pulse_signal, long time);
     // Safe to be interrupted
     void get_heartrate(HeartRate* out) const;
+
+    void enable_logging() {
+      logging_enabled = true;
+      pulse_val_stream.logging_enabled = true;
+      hr_stream.logging_enabled = true;
+    }
 
     PulseTrackerInternals():
       pulse_signals(PULSE_SLOPE_WINDOW),
@@ -381,9 +391,10 @@ class PulseTracker {
     PulseTrackerInternals internals;
   public:
     // Fast func to push a signal onto the buffer. Not safe to be interrupted.
-    void push(int pulse_signal, long time) { internals.push(pulse_signal, time); };
+    void push(int pulse_signal, long time) { internals.push(pulse_signal, time); }
     // Safe to be interrupted
-    void get_heartrate(HeartRate* out) const { internals.get_heartrate(out); };
+    void get_heartrate(HeartRate* out) const { internals.get_heartrate(out); }
+    void enable_logging() { internals.enable_logging(); }
 };
 
 #endif

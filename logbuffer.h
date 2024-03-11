@@ -3,22 +3,18 @@
 
 #include <memory>
 #include <functional>
-
-// Assumes this to be the integer type for which setting
-// and getting is an atomic operation. Depends on the underlying architecture,
-// but since I'm only using esp8266, and it's 32 bit, int is fine.
-#define ATOMIC_INT int
+#include <Arduino.h>
 
 // A circular ring buffer loging util, for safe logging within interrupts.
 class LogBuffer {
   private:
-    ATOMIC_INT write_head;
-    ATOMIC_INT read_head;
-    ATOMIC_INT buffer_len;
+    int write_head;
+    int read_head;
+    int buffer_len;
     std::unique_ptr<uint8_t[]> buffer;
     static std::unique_ptr<LogBuffer> global_instance;
   public:
-    LogBuffer(ATOMIC_INT length) : buffer(new uint8_t[length]) {
+    LogBuffer(int length) : buffer(new uint8_t[length]) {
       buffer_len = length;
       // write head must always be ahead of read_head
       // leaves 1 char on the table, but simplifies thread safety
@@ -35,7 +31,7 @@ class LogBuffer {
     // should be called within loop or ticker to periodically dump the log lines in
     // the buffer to Serial, otherwise no logs will be printed and the buffer will overflow.
     void flush(std::function<void(const uint8_t*, size_t)> write);
-    static void init_global(ATOMIC_INT length);
+    static void init_global(int length);
     static LogBuffer* global();
 };
 

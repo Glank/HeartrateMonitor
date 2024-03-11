@@ -62,6 +62,7 @@ void WidthStatsStream::before_pop() {
   }
 }
 
+#define LOG_PEAK(peak, valid)  LOG(128, "pk,%d,%d,%c,%f,%f", peak->t, peak->amp, valid, (peak->w-peak->avg)/peak->std, peak->w/peak->avg);
 void PulseValidationStream::after_push() {
   auto& f = heads[FRONT];
   bool assumed_valid = (f->w-f->avg)/f->std > -1 || f->w/f->avg >= 0.7;
@@ -72,8 +73,14 @@ void PulseValidationStream::after_push() {
     std::shared_ptr<Pulse> pulse = pulse_allocator->make();
     pulse->t = heads[FRONT]->t;
     next_stream->push(pulse);
-    while(heads[FRONT] != nullptr)
+    if(logging_enabled) {
+      if (sizes[BACK] == 2)
+        LOG_PEAK(heads[BACK], 'f');
+      LOG_PEAK(heads[FRONT], 'v');
+    }
+    while(heads[FRONT] != nullptr) {
       advance(BACK);
+    }
     return;
   }
 
@@ -94,12 +101,18 @@ void PulseValidationStream::after_push() {
       std::shared_ptr<Pulse> pulse = pulse_allocator->make();
       pulse->t = heads[BACK]->t;
       next_stream->push(pulse);
+      if (logging_enabled)
+        LOG_PEAK(heads[BACK], 'v');
+    } else if (logging_enabled) {
+      LOG_PEAK(heads[BACK], 'f');
     }
     advance(BACK);
   }
   std::shared_ptr<Pulse> pulse = pulse_allocator->make();
   pulse->t = heads[FRONT]->t;
   next_stream->push(pulse);
+  if (logging_enabled)
+    LOG_PEAK(heads[FRONT], 'v');
   advance(BACK);
 }
 
@@ -154,6 +167,8 @@ void HRCalcStream::after_push() {
   } else {
     hr->err[0] = 0;
   }
+  if (logging_enabled)
+    LOG(64, "hr,%d,%f,%f,%f,%s", hr->time, hr->hr, hr->hr_lb, hr->hr_ub, hr->err);
   next_stream->push(hr);
 }
 void PulseTrackerInternals::slope_and_max(float* slope, int* max_index, int* max_amp) {
@@ -193,14 +208,18 @@ void PulseTrackerInternals::detect_peak(long now) {
     return;
 
   std::shared_ptr<Peak> peak = peak_mem.make();
-  peak->t = now+(max_i*PULSE_SLOPE_WINDOW_MS/PULSE_SLOPE_WINDOW);
+  peak->t = now-PULSE_SLOPE_WINDOW_MS+(max_i*PULSE_SLOPE_WINDOW_MS/PULSE_SLOPE_WINDOW);
   peak->amp = max_amp;
+  if(logging_enabled)
+    LOG(32, "rp,%d,%d", peak->t, peak->amp);
   width_calc_stream.push(peak);
 }
 void PulseTrackerInternals::push(std::shared_ptr<HeartRate> hr) {
   cur_hr = hr;
 }
 void PulseTrackerInternals::push(int pulse_signal, long time) {
+  if(logging_enabled)
+    LOG(32, "p,%d,%d", time, pulse_signal);
   pulse_signals.push_back() = pulse_signal;
   detect_peak(time);
 }

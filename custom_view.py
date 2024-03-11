@@ -22,14 +22,14 @@ BAUD_RATE = 460800
 MAX_HR_RECS = 15
 
 TBL_FORMATTING = {
-  'p': {
+  'p': { #pulse signal
     'cols' : [
       ["time", lambda x:int(x)],
       ["amp", lambda x:int(x)],
     ],
     'max_recs': 2**9,
   },
-  'hr': {
+  'hr': { #heartrates
     'cols' : [
       ["time", lambda x:int(x)],
       ["hr", lambda x:float(x)],
@@ -38,6 +38,23 @@ TBL_FORMATTING = {
       ["err", lambda x:x],
     ],
     'max_recs': 15,
+  },
+  'rp': { #raw peaks
+    'cols': [
+      ["time", lambda x:int(x)],
+      ["amp", lambda x:int(x)],
+    ],
+    'max_recs': 30,
+  },
+  'pk': { #validated peaks
+    'cols': [
+      ["time", lambda x:int(x)],
+      ["amp", lambda x:int(x)],
+      ["valid", lambda x: x=='v'],
+      ["v1", lambda x:float(x)], #validation metric 1: (w-avg)/std
+      ["v2", lambda x:float(x)], #validation metric 2: w/avg
+    ],
+    'max_recs': 30,
   },
 }
 
@@ -50,7 +67,7 @@ GRAPHS = {
         'x': ['hr', 'time'],
         'y': ['hr', 'hr'],
         'fmt': 'go',
-        'where': lambda r: not r[4],
+        'where': lambda r: not r[4], #no error
         'annotate': True
       },
       {
@@ -58,9 +75,16 @@ GRAPHS = {
         'x': ['hr', 'time'],
         'y': ['hr', 'hr'],
         'fmt': 'ro',
-        'where': lambda r: r[4],
+        'where': lambda r: r[4], #is error
       },
     ],
+    'x_lim': {
+      'col': ['hr', 'time'],
+    },
+    'y_lim': {
+      'col': ['hr', 'hr'],
+      'padding': 10,
+    },
   },
   'Pulse' : {
     'screen_pos': [0,0,1,0.5],
@@ -72,7 +96,34 @@ GRAPHS = {
         'y': ['p', 'amp'],
         'fmt': 'b-',
       },
+      {
+        'name': 'raw_peaks',
+        'x': ['rp', 'time'],
+        'y': ['rp', 'amp'],
+        'fmt': 'bo',
+      },
+      {
+        'name': 'valid_peaks',
+        'x': ['pk', 'time'],
+        'y': ['pk', 'amp'],
+        'fmt': 'go',
+        'where': lambda r: r[2], #is valid
+      },
+      {
+        'name': 'invalid_peaks',
+        'x': ['pk', 'time'],
+        'y': ['pk', 'amp'],
+        'fmt': 'ro',
+        'where': lambda r: not r[2], #not valid
+      },
     ],
+    'x_lim': {
+      'col': ['p', 'time'],
+    },
+    'y_lim': {
+      'col': ['p', 'amp'],
+      'padding': 50,
+    },
   },
 }
 
@@ -210,10 +261,6 @@ def main():
         ann = annotations[g].pop(-1)
         ann.remove()
 
-      min_x = float('inf')
-      max_x = float('-inf')
-      min_y = float('inf')
-      max_y = float('-inf')
       for line_spec in graph_spec.get('lines', []):
         l = line_spec['name']
         x_tbl, x_col = tuple(line_spec['x'])
@@ -221,10 +268,6 @@ def main():
         x = get_col(x_tbl, x_col, line_spec.get('where', None))
         y = get_col(y_tbl, y_col, line_spec.get('where', None))
         if x:
-          min_x = min(min(x), min_x)
-          max_x = max(max(x), max_x)
-          min_y = min(min(y), min_y)
-          max_y = max(max(y), max_y)
           line = lines[g][l]
           if line is None:
             lines[g][l], = axes[g].plot(x,y,line_spec['fmt'])
@@ -234,10 +277,21 @@ def main():
             for xi,yi in zip(x,y):
               annotations[g].append(axes[g].annotate(str(yi), (xi,yi), fontsize=10, rotation='vertical'))
 
-      if min_x != float('inf'):
-        axes[g].set_xlim(min_x, max_x)
-        axes[g].set_ylim(min_y, max_y)
-    
+      x_lim = graph_spec.get('x_lim', None)
+      y_lim = graph_spec.get('y_lim', None)
+      if x_lim:
+        padding = x_lim.get('padding', 0)
+        col = get_col(*tuple(x_lim['col']))
+        if col:
+          rng = min(col)-padding, max(col)+padding
+          axes[g].set_xlim(*rng)
+      if y_lim:
+        padding = y_lim.get('padding', 0)
+        col = get_col(*tuple(y_lim['col']))
+        if col:
+          rng = min(col)-padding, max(col)+padding
+          axes[g].set_ylim(*rng)
+
     plt.draw()
     plt.pause(0.1)
 
